@@ -128,7 +128,7 @@ def http_request():
 def filter_files(file_list):
     output = []
     EXCLUDED_DIRS = ['node_modules', '.git', '__pycache__', 'dist', 'build', 'public']
-    ALLOWED_EXTENSIONS = ['.js', '.ts', '.tsx', '.jsx', '.java', '.sql', '.py']
+    ALLOWED_EXTENSIONS = ['.js', '.ts', '.tsx', '.jsx', '.java', '.sql', '.py', '.cpp', '.hpp']
 
     for _file in file_list:
         filepath = _file['path']
