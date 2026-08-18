@@ -1,0 +1,76 @@
+name: AI Content Generation (Doc & Audit)
+
+# Déclencheurs : à chaque push sur main ou manuellement depuis l'onglet Actions
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  ai-pipeline:
+    runs-on: ubuntu-latest
+
+    # Donne les droits d'écrire et de push sur ton dépôt
+    permissions:
+      contents: write
+
+    steps:
+      # 1. Récupérer le code du repository
+      - name: Checkout repository code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 
+
+      # 2. Configurer Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # 3. Installer les dépendances Python
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f workflow-scripts/requirements.txt ]; then pip install -r workflow-scripts/requirements.txt; fi
+
+      # 4. Exécuter le script de Documentation
+      - name: Run workflow_doc.py
+        env:
+          PAT_GITHUB_KEY: ${{ secrets.PAT_GITHUB_KEY }}
+          GOOGLE_AI_KEY: ${{ secrets.GOOGLE_AI_KEY }}
+          COMMIT_HASH: ${{ github.sha }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          export COMMIT_HASH=$(echo $COMMIT_HASH | cut -c1-7)
+          if [ -z "$COMMIT_MSG" ]; then
+            export COMMIT_MSG="Manual workflow trigger"
+            export COMMIT_HASH="manual"
+          fi
+          python workflow-scripts/workflow_doc.py
+
+      # 5. Commit unique et Push global des résultats (README, docs)
+      - name: Commit and Push all generated updates
+        run: |
+          # Configuration du Git officiel de GitHub Actions Bot
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # Récupération du message du commit original
+          ORIGINAL_MSG="${{ github.event.head_commit.message }}"
+          if [ -z "$ORIGINAL_MSG" ]; then 
+            ORIGINAL_MSG="manual trigger"
+          fi
+          
+          # On indexe absolument TOUS les changements générés par le script
+          git add README.md
+          git add docs/
+          
+          # Vérification s'il y a des fichiers modifiés
+          if git diff-index --quiet HEAD --; then
+            echo "Aucun changement détecté dans la documentation. Rien à commiter."
+          else
+            # Un seul commit combiné
+            git commit -m "ai: doc & audit - $ORIGINAL_MSG"
+            git push origin main
+          fi
