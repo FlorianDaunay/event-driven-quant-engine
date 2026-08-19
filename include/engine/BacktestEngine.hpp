@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <cstdint>
 #include "core/EventQueue.hpp"
 #include "data/HistoricalDataFeed.hpp"
 #include "execution/ExecutionEngine.hpp"
@@ -20,6 +21,8 @@ namespace quant
         double total_realized_pnl{0.0};
         double total_unrealized_pnl{0.0};
         size_t total_events_processed{0};
+        uint64_t start_timestamp{0};
+        uint64_t end_timestamp{0};
     };
 
     class BacktestEngine
@@ -34,6 +37,10 @@ namespace quant
         bool loadData(const Symbol &symbol, const std::string &filepath);
         bool loadData(const std::vector<std::pair<Symbol, std::string>> &datasets);
         void setStrategy(std::unique_ptr<Strategy> strategy);
+
+        // Configuration des bornes temporelles
+        void setStartDate(uint64_t timestamp) { start_timestamp_filter_ = timestamp; }
+        void setEndDate(uint64_t timestamp) { end_timestamp_filter_ = timestamp; }
 
         BacktestResults run();
 
@@ -50,6 +57,11 @@ namespace quant
         std::unique_ptr<Strategy> strategy_;
 
         size_t processed_events_count_{0};
+        uint64_t start_timestamp_{0};
+        uint64_t end_timestamp_{0};
+
+        uint64_t start_timestamp_filter_{0};
+        uint64_t end_timestamp_filter_{0};
 
         void processEvent(const std::shared_ptr<Event> &event);
     };

@@ -32,16 +32,44 @@ namespace quant
         }
 
         processed_events_count_ = 0;
+        start_timestamp_ = 0;
+        end_timestamp_ = 0;
 
-        while (data_feed_.hasNext())
+        bool running = true;
+        while (data_feed_.hasNext() && running)
         {
             data_feed_.step();
 
-            while (!event_queue_.empty())
+            while (!event_queue_.empty() && running)
             {
                 auto event = event_queue_.pop();
                 if (event)
                 {
+                    if (event->getType() == EventType::Market)
+                    {
+                        const auto &market_event = static_cast<const MarketEvent &>(*event);
+                        uint64_t ts = market_event.getBar().timestamp;
+
+                        // Arrêt strict si la date de fin est dépassée
+                        if (end_timestamp_filter_ > 0 && ts > end_timestamp_filter_)
+                        {
+                            running = false;
+                            break;
+                        }
+
+                        // Ignore les événements antérieurs à la date de début demandée (attend les données disponibles)
+                        if (start_timestamp_filter_ > 0 && ts < start_timestamp_filter_)
+                        {
+                            continue;
+                        }
+
+                        if (start_timestamp_ == 0)
+                        {
+                            start_timestamp_ = ts;
+                        }
+                        end_timestamp_ = ts;
+                    }
+
                     processEvent(event);
                     processed_events_count_++;
                 }
@@ -54,6 +82,8 @@ namespace quant
         results.total_realized_pnl = portfolio_.getRealizedPnL();
         results.total_unrealized_pnl = portfolio_.getUnrealizedPnL();
         results.total_events_processed = processed_events_count_;
+        results.start_timestamp = start_timestamp_;
+        results.end_timestamp = end_timestamp_;
 
         if (results.initial_cash > 0.0)
         {

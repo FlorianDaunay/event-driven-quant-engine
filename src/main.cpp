@@ -3,6 +3,10 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <sstream>
+#include <iomanip>
+#include <ctime>
+#include <cmath>
 
 #include "engine/BacktestEngine.hpp"
 #include "portfolio/Portfolio.hpp"
@@ -14,9 +18,6 @@
 #include <windows.h>
 #endif
 
-// ============================================================================
-// CONFIGURATION SETUP
-// ============================================================================
 enum class StrategyType
 {
     SingleAsset,
@@ -25,27 +26,59 @@ enum class StrategyType
 
 struct SimulationConfig
 {
-    // Mode Selection
     StrategyType strategy_type = StrategyType::MultiAsset;
+    std::vector<std::string> tickers = {"AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "JNJ", "JPM", "MA", "MC.PA"};
 
-    // Ticker Universe (First ticker will be used if StrategyType::SingleAsset is selected)
-    std::vector<std::string> tickers = {"AAPL", "MSFT", "GOOGL", "MA", "MC.PA"};
+    std::string start_date = "2016-01-01";
+    std::string end_date = "2026-01-01";
 
-    // Execution & Engine Settings
     double initial_cash = 10000000.0;
     double commission_per_share = 0.005;
     double slippage_pct = 0.0002;
 
-    // Strategy Parameters
     double initial_target_dte_years = 0.25;
     double moneyness_ratio = 1.0;
     int vol_window_size = 60;
-    double rebalance_threshold = 0.01; // 5% rebalance threshold
+    double rebalance_threshold = 0.05;
+
+    double cash_reserve_ratio = 0.25;
+    double margin_req_ratio = 0.10;
 };
 
-// ============================================================================
-// STRATEGY FACTORY
-// ============================================================================
+// Convertit une chaîne "YYYY-MM-DD" en timestamp POSIX (secondes)
+uint64_t dateToTimestamp(const std::string &date_str)
+{
+    if (date_str.empty())
+        return 0;
+    std::tm tm = {};
+    std::stringstream ss(date_str);
+    ss >> std::get_time(&tm, "%Y-%m-%d");
+    if (ss.fail())
+        return 0;
+
+    tm.tm_hour = 0;
+    tm.tm_min = 0;
+    tm.tm_sec = 0;
+    tm.tm_isdst = -1;
+
+    std::time_t t = std::mktime(&tm);
+    return (t == -1) ? 0 : static_cast<uint64_t>(t);
+}
+
+std::string formatTimestamp(uint64_t timestamp_sec)
+{
+    if (timestamp_sec == 0)
+        return "N/A";
+    std::time_t temp = static_cast<std::time_t>(timestamp_sec);
+    std::tm *t = std::gmtime(&temp);
+    if (!t)
+        return "N/A";
+
+    char buffer[11];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d", t);
+    return std::string(buffer);
+}
+
 std::unique_ptr<quant::Strategy> createStrategy(
     const SimulationConfig &config,
     quant::BacktestEngine &engine,
@@ -57,34 +90,22 @@ std::unique_ptr<quant::Strategy> createStrategy(
     if (config.strategy_type == StrategyType::SingleAsset)
     {
         const auto &underlying_symbol = datasets.front().first;
-
-        std::cout << "[Strategy] Instantiating Single-Asset DeltaHedgeStrategy ("
-                  << underlying_symbol.ticker << ")...\n";
-
-        // Define explicit option contract parameters for the single-asset strategy
         quant::Symbol option_symbol(underlying_symbol.ticker, quant::SecurityType::Option);
-        double strike_price = 150.0; // Set your initial target strike
-        double dte_years = config.initial_target_dte_years;
-        double risk_free_rate = 0.05;       // e.g., 5%
-        double estimated_volatility = 0.20; // e.g., 20% IV
-        bool is_call = true;
 
         return std::make_unique<quant::DeltaHedgeStrategy>(
             event_queue,
             engine.getDataFeed(),
             underlying_symbol,
             option_symbol,
-            strike_price,
-            dte_years,
-            risk_free_rate,
-            estimated_volatility,
-            is_call,
+            150.0,
+            config.initial_target_dte_years,
+            0.05,
+            0.20,
+            true,
             config.rebalance_threshold);
     }
     else
     {
-        std::cout << "[Strategy] Instantiating MultiAssetDeltaHedgeStrategy...\n";
-
         auto strategy = std::make_unique<quant::MultiAssetDeltaHedgeStrategy>(
             event_queue,
             engine.getDataFeed(),
@@ -95,6 +116,8 @@ std::unique_ptr<quant::Strategy> createStrategy(
         default_params.moneyness_ratio = config.moneyness_ratio;
         default_params.vol_window_size = config.vol_window_size;
         default_params.rebalance_threshold = config.rebalance_threshold;
+        default_params.cash_reserve_ratio = config.cash_reserve_ratio;
+        default_params.margin_req_ratio = config.margin_req_ratio;
 
         for (const auto &[symbol, path] : datasets)
         {
@@ -105,9 +128,6 @@ std::unique_ptr<quant::Strategy> createStrategy(
     }
 }
 
-// ============================================================================
-// MAIN EXECUTION
-// ============================================================================
 int main()
 {
 #ifdef _WIN32
@@ -117,34 +137,28 @@ int main()
     SimulationConfig config;
 
     std::cout << "====================================================\n";
-    std::cout << "   QUANT ENGINE C++17 - EVENT-DRIVEN BACKTESTER    \n";
+    std::cout << "    QUANT ENGINE C++17 - EVENT-DRIVEN BACKTESTER    \n";
     std::cout << "====================================================\n\n";
 
-    // 1. Prepare Dataset Pairs based on Config
     std::vector<std::pair<quant::Symbol, std::string>> datasets;
-
-    if (config.strategy_type == StrategyType::SingleAsset)
+    for (const auto &ticker : config.tickers)
     {
-        // Use only the primary ticker for single asset mode
-        const std::string &primary_ticker = config.tickers.front();
         datasets.emplace_back(
-            quant::Symbol(primary_ticker, quant::SecurityType::Equity),
-            "data/" + primary_ticker + ".csv");
-    }
-    else
-    {
-        // Load full ticker universe for multi asset mode
-        datasets.reserve(config.tickers.size());
-        for (const auto &ticker : config.tickers)
-        {
-            datasets.emplace_back(
-                quant::Symbol(ticker, quant::SecurityType::Equity),
-                "data/" + ticker + ".csv");
-        }
+            quant::Symbol(ticker, quant::SecurityType::Equity),
+            "data/" + ticker + ".csv");
     }
 
-    // 2. Initialize Engine
     quant::BacktestEngine engine(config.initial_cash, config.commission_per_share, config.slippage_pct);
+
+    // Application des filtres de dates de début et de fin
+    if (!config.start_date.empty())
+    {
+        engine.setStartDate(dateToTimestamp(config.start_date));
+    }
+    if (!config.end_date.empty())
+    {
+        engine.setEndDate(dateToTimestamp(config.end_date));
+    }
 
     std::cout << "[1/4] Loading historical data for " << datasets.size() << " ticker(s)...\n";
     if (!engine.loadData(datasets))
@@ -154,39 +168,55 @@ int main()
     }
     std::cout << "     -> Data loaded successfully.\n\n";
 
-    // 3. Attach Strategy via Factory
     std::cout << "[2/4] Setting up Strategy...\n";
     engine.setStrategy(createStrategy(config, engine, datasets));
     std::cout << "     -> Strategy registered successfully.\n\n";
 
-    // 4. Run Backtest
     std::cout << "[3/4] Running backtest simulation...\n";
     try
     {
         quant::BacktestResults results = engine.run();
         std::cout << "     -> Simulation completed.\n\n";
 
-        // 5. Output Results Summary
+        double duration_years = 0.0;
+        double annualized_return_pct = 0.0;
+
+        if (results.start_timestamp > 0 && results.end_timestamp > results.start_timestamp)
+        {
+            constexpr double seconds_per_year = 365.25 * 86400.0;
+            duration_years = static_cast<double>(results.end_timestamp - results.start_timestamp) / seconds_per_year;
+
+            if (duration_years > 0.0 && results.final_equity > 0.0)
+            {
+                double cagr = std::pow(results.final_equity / results.initial_cash, 1.0 / duration_years) - 1.0;
+                annualized_return_pct = cagr * 100.0;
+            }
+        }
+
         std::cout << "====================================================\n";
         std::cout << "               BACKTEST RESULTS SUMMARY             \n";
         std::cout << "====================================================\n";
+        std::cout << " Start Date               : " << formatTimestamp(results.start_timestamp) << "\n";
+        std::cout << " End Date                 : " << formatTimestamp(results.end_timestamp) << "\n";
         std::cout << std::fixed << std::setprecision(2);
-        std::cout << " Initial Cash                  : $" << results.initial_cash << "\n";
-        std::cout << " Final Portfolio Equity        : $" << results.final_equity << "\n";
-        std::cout << " Total Realized PnL            : $" << results.total_realized_pnl << "\n";
-        std::cout << " Total Unrealized PnL          : $" << results.total_unrealized_pnl << "\n";
-        std::cout << " Total Return                  : " << results.total_return_pct << " %\n";
-        std::cout << " Processed Events              : " << results.total_events_processed << "\n";
+        std::cout << " Duration                 : " << duration_years << " Years\n";
+        std::cout << "----------------------------------------------------\n";
+        std::cout << " Initial Cash             : $" << results.initial_cash << "\n";
+        std::cout << " Final Portfolio Equity   : $" << results.final_equity << "\n";
+        std::cout << " Total Realized PnL       : $" << results.total_realized_pnl << "\n";
+        std::cout << " Total Unrealized PnL     : $" << results.total_unrealized_pnl << "\n";
+        std::cout << " Total Return             : " << results.total_return_pct << " %\n";
+        std::cout << " Annualized Return (CAGR) : " << annualized_return_pct << " %\n";
+        std::cout << " Processed Events         : " << results.total_events_processed << "\n";
         std::cout << "====================================================\n\n";
 
-        // 6. Asset Position Breakdown
         std::cout << "--- FINAL ASSET POSITIONS BREAKDOWN ---\n";
         for (const auto &[symbol, pos] : engine.getPortfolio().getAllPositions())
         {
             std::cout << " Ticker: " << std::left << std::setw(6) << symbol.ticker
-                      << " | Qty: " << std::right << std::setw(8) << pos.quantity
+                      << " | Qty: " << std::right << std::setw(10) << pos.quantity
                       << " | Avg Price: $" << std::setw(8) << pos.average_price
-                      << " | Realized PnL: $" << std::setw(10) << pos.realized_pnl << "\n";
+                      << " | Realized PnL: $" << std::setw(11) << pos.realized_pnl << "\n";
         }
         std::cout << "====================================================\n";
     }
